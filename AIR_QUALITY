@@ -1,0 +1,552 @@
+/**** Start of imports. If edited, may not auto-convert in the playground. ****/
+var cityTrees = ee.FeatureCollection("projects/ee-ope42/assets/City_Trees"),
+    lewisPlace_ALL = ee.FeatureCollection("projects/ee-ope42/assets/Neighborhoods"),
+    cityStreets = ee.FeatureCollection("projects/ee-ope42/assets/STREETS"),
+    table4 = ee.FeatureCollection("projects/ee-ope42/assets/stl_boundary"),
+    cityParks = ee.FeatureCollection("projects/ee-ope42/assets/parks"),
+    landUse = ee.FeatureCollection("projects/ee-ope42/assets/SLUP2019");
+/***** End of imports. If edited, may not auto-convert in the playground. *****/
+
+
+// Filter the dataset to get only the Lewis Place boundary
+var lewisPlaceBoundary = lewisPlace_ALL.filter(ee.Filter.eq('NHD_NAME', 'Lewis Place'));
+print(lewisPlaceBoundary)
+
+//3. Clip Other Datasets to Lewis Place
+//To focus your analysis on the Lewis Place area, clip the other datasets to this boundary:
+
+// Clip City Parks to Lewis Place
+var cityParksLP = cityParks.filterBounds(lewisPlaceBoundary);
+// Clip City Streets to Lewis Place
+var streetsLP = cityStreets.filterBounds(lewisPlaceBoundary);
+// Clip City Trees to Lewis Place
+var treesLP = cityTrees.filterBounds(lewisPlaceBoundary);
+// Clip Land Use Data to Lewis Place
+var landUseLP = landUse.filterBounds(lewisPlaceBoundary);///////////////
+
+
+//4. Visualize the Data
+//Add the clipped datasets to the map for visualization:
+// Center the map on Lewis Place
+Map.centerObject(lewisPlaceBoundary, 14);
+// Add City Streets to the map
+Map.addLayer(streetsLP, {color: 'blue'}, 'City Streets');
+// Add Lewis Place boundary to the map
+Map.addLayer(lewisPlaceBoundary, {color: 'red'}, 'Lewis Place Boundary');
+
+
+// =========================
+// 1. LOAD DATASETS (same as the shapefiles)
+// =========================
+var residentialParcels = landUseLP.filterBounds(lewisPlaceBoundary)
+                    .filter(ee.Filter.inList('SLUP_LATES',['NPA','NDA']));
+
+var industrialParcels = landUseLP.filterBounds(lewisPlaceBoundary)
+                    .filter(ee.Filter.eq('SLUP_LATES','IPDA'));
+
+var parkParcels = landUseLP.filterBounds(lewisPlaceBoundary)
+                    .filter(ee.Filter.eq('SLUP_LATES','ROSPDA'));
+Map.addLayer(treesLP, {color:'brown'}, 'Trees');
+Map.addLayer(parkParcels, {color:'green'}, 'Parks');
+Map.addLayer(industrialParcels, {color:'blue'}, 'Industrial Parcels');
+Map.addLayer(residentialParcels, {color:'pink'}, 'residential Parcels');
+
+// =========================
+// Industry area 
+// =========================
+
+// Compute total Lewis Place area (m²)
+var totalArea = ee.Number(lewisPlaceBoundary.geometry().area());
+
+// Compute industry Lewis Place area (m²)
+var Industy_Area = ee.Number(industrialParcels.geometry().area());
+// Compute percentage
+var industrialPct = Industy_Area.divide(totalArea).multiply(100);
+
+// Compute residential Lewis Place area (m²)
+var residential_Area = ee.Number(residentialParcels.geometry().area());
+// Compute percentage
+var residentialPct = residential_Area.divide(totalArea).multiply(100);
+
+// Compute Park Lewis Place area (m²)
+var park_Area = ee.Number(parkParcels.geometry().area());
+// Compute percentage
+var parkPct = park_Area.divide(totalArea).multiply(100);
+
+
+// Print results
+print('Industrial area (m²):', Industy_Area);
+print('Total area (m²):', totalArea);
+print('Industrial % of Lewis Place:', industrialPct);
+print('Residential % of Lewis Place:', residentialPct);
+print('Park % of Lewis Place:', parkPct);
+
+var chart = ui.Chart.array.values(
+  ee.Array([industrialPct, residentialPct, parkPct]),
+  0,
+  ee.List(['Industrial', 'Residential', 'Park'])
+)
+.setChartType('PieChart')
+.setOptions({
+  title: 'Lewis Place Land Use (%)',
+  slices: {
+    0: {color: 'blue'},
+    1: {color: 'pink'},
+    2: {color: 'green'}
+  }
+});
+print(chart);
+
+// =========================
+// 2. AIR POLLUTION for pm2.5 
+// =========================
+var daily_pm25 = ee.ImageCollection("projects/sat-io/open-datasets/GHAP/GHAP_D1K_PM25");
+var monthly_pm25 = ee.ImageCollection("projects/sat-io/open-datasets/GHAP/GHAP_M1K_PM25");
+var yearly_pm25 = ee.ImageCollection("projects/sat-io/open-datasets/GHAP/GHAP_Y1K_PM25");
+print('Total Daily Images',daily_pm25.size())
+
+//Scale the images (Scaling factor is 0.1)
+var scale = function(image){
+  return image.multiply(0.1).copyProperties(image, ['system:time_start', 'system:time_end']);
+}
+daily_pm25=daily_pm25.map(scale)
+monthly_pm25 = monthly_pm25.map(scale)
+yearly_pm25 = yearly_pm25.map(scale)
+
+// Define a function to clip images
+var clipToAOI = function(image){
+  return image.clip(lewisPlaceBoundary);
+}
+// Apply clipping to each ImageCollection
+daily_pm25 = daily_pm25.map(clipToAOI);
+monthly_pm25 = monthly_pm25.map(clipToAOI);
+yearly_pm25 = yearly_pm25.map(clipToAOI);
+
+// =========================
+// 3. Function to compute mean PM2.5 over 3 region 
+// =========================
+function meanPM25OverRegion(region, name){
+  return monthly_pm25.map(function(image){
+    var mean = image.reduceRegion({
+      reducer: ee.Reducer.mean(),
+      geometry: region,
+      scale: 1000,
+      maxPixels: 1e13
+    });
+    return ee.Feature(null, {
+      'date': image.date().format('YYYY-MM-dd'),
+      'PM25': mean.get('b1'),
+      'Region': name
+    });
+  });
+}
+
+var residential_fc = meanPM25OverRegion(residentialParcels, 'Residential');
+var industrial_fc  = meanPM25OverRegion(industrialParcels, 'Industrial');
+var park_fc        = meanPM25OverRegion(parkParcels, 'Park');
+
+var allRegions = residential_fc.merge(industrial_fc)//.merge(park_fc);
+
+var chart = ui.Chart.feature.groups({
+  features: allRegions,
+  xProperty: 'date',
+  yProperty: 'PM25',
+  seriesProperty: 'Region'
+})
+.setOptions({
+  title: 'Monthly PM2.5 Comparison by Region',
+  hAxis: {title: 'Date'},
+  vAxis: {title: 'PM2.5 (µg/m³)'},
+  lineWidth: 2,
+  pointSize: 3
+});
+
+// 2. Print chart in console (optional)
+print(chart);
+
+Export.table.toDrive({
+  collection: allRegions,
+  description: 'LewisPlace_PM25_byRegion',
+  fileFormat: 'CSV'
+});
+
+// =========================
+// 2. AIR POLLUTION for AAI
+// =========================
+// 1. Load Sentinel-5P
+var aai = ee.ImageCollection('COPERNICUS/S5P/NRTI/L3_AER_AI')
+            .filterBounds(lewisPlaceBoundary)
+            .filterDate('2017-01-01', '2025-01-01');
+
+// Function to compute monthly mean AAI for a region
+function monthlyAAI(region, name){
+  // List of years and months
+  var years = ee.List.sequence(2020, 2024); // 2025 is partial
+  var months = ee.List.sequence(1, 12);
+  
+  var monthly_mean = years.map(function(y){
+    y = ee.Number(y);
+    return months.map(function(m){
+      m = ee.Number(m);
+      var filtered = aai
+        .filter(ee.Filter.calendarRange(y, y, 'year'))
+        .filter(ee.Filter.calendarRange(m, m, 'month'));
+      
+      var mean = filtered.mean().reduceRegion({
+        reducer: ee.Reducer.mean(),
+        geometry: region,
+        scale: 1000,       // adjust if needed
+        maxPixels: 1e13
+      });
+      
+      var date = ee.Date.fromYMD(y, m, 1);
+      return ee.Feature(null, {
+        'date': date.format('YYYY-MM-dd'),
+        'AAI': mean.get('absorbing_aerosol_index'),
+        'Region': name
+      });
+    });
+  }).flatten();
+  
+  return ee.FeatureCollection(monthly_mean);
+}
+
+// 2. Compute for each region
+var residential_fc = monthlyAAI(residentialParcels, 'Residential');
+var industrial_fc  = monthlyAAI(industrialParcels, 'Industrial');
+var park_fc        = monthlyAAI(parkParcels, 'Park');
+
+// Merge all regions
+var allRegions = residential_fc.merge(industrial_fc)//.merge(park_fc);
+
+// 3. Plot chart
+var chart = ui.Chart.feature.groups({
+  features: allRegions,
+  xProperty: 'date',
+  yProperty: 'AAI',
+  seriesProperty: 'Region'
+})
+.setOptions({
+  title: 'Monthly Absorbing Aerosol Index (AAI) by Region',
+  hAxis: {title: 'Date'},
+  vAxis: {title: 'AAI'},
+  lineWidth: 2,
+  pointSize: 3
+});
+
+print(chart);
+Export.table.toDrive({
+  collection: allRegions,
+  description: 'LewisPlace_AAI_byRegion',
+  fileFormat: 'CSV'
+});
+
+// =========================
+// 3. AIR POLLUTION for CO
+// =========================
+// 1. Filter the CO dataset
+var co = ee.ImageCollection('COPERNICUS/S5P/NRTI/L3_CO')
+          .filterBounds(lewisPlaceBoundary)
+          .filterDate('2017-01-01', '2025-01-01');
+
+// Function to compute monthly mean CO for a region
+function monthlyCO(region, name){
+  var years = ee.List.sequence(2020, 2024); // 2025 is partial
+  var months = ee.List.sequence(1, 12);
+  
+  var monthly_mean = years.map(function(y){
+    y = ee.Number(y);
+    return months.map(function(m){
+      m = ee.Number(m);
+      var filtered = co
+        .filter(ee.Filter.calendarRange(y, y, 'year'))
+        .filter(ee.Filter.calendarRange(m, m, 'month'));
+      
+      var mean = filtered.mean().reduceRegion({
+        reducer: ee.Reducer.mean(),
+        geometry: region,
+        scale: 1000,      // Sentinel-5P ~7 km native, 1 km is fine for averaging
+        maxPixels: 1e13
+      });
+      
+      var date = ee.Date.fromYMD(y, m, 1);
+      return ee.Feature(null, {
+        'date': date.format('YYYY-MM-dd'),
+        'CO': mean.get('CO_column_number_density'),
+        'Region': name
+      });
+    });
+  }).flatten();
+  
+  return ee.FeatureCollection(monthly_mean);
+}
+
+// 2. Compute for each region
+var residential_fc = monthlyCO(residentialParcels, 'Residential');
+var industrial_fc  = monthlyCO(industrialParcels, 'Industrial');
+var park_fc        = monthlyCO(parkParcels, 'Park');
+
+// Merge all regions
+var allRegions = residential_fc.merge(industrial_fc)//.merge(park_fc);
+
+// 3. Plot chart
+var chart = ui.Chart.feature.groups({
+  features: allRegions,
+  xProperty: 'date',
+  yProperty: 'CO',
+  seriesProperty: 'Region'
+})
+.setOptions({
+  title: 'Monthly CO Column Number Density by Region',
+  hAxis: {title: 'Date'},
+  vAxis: {title: 'CO (mol/m²)'},
+  lineWidth: 2,
+  pointSize: 3
+});
+
+print(chart);
+
+Export.table.toDrive({
+  collection: allRegions,
+  description: 'LewisPlace_CO_byRegion',
+  fileFormat: 'CSV'
+});
+
+// =========================
+// 4. Heat Map
+// =========================
+
+// 1. Filter datasets to the same period and region
+var pm25_monthly = ee.ImageCollection("projects/sat-io/open-datasets/GHAP/GHAP_M1K_PM25")
+                     .filterBounds(lewisPlaceBoundary)
+                     .filterDate('2020-01-01', '2025-01-01');
+
+var aai_monthly = ee.ImageCollection('COPERNICUS/S5P/NRTI/L3_AER_AI')
+                     .filterBounds(lewisPlaceBoundary)
+                     .filterDate('2020-01-01', '2025-01-01');
+
+var co_monthly = ee.ImageCollection('COPERNICUS/S5P/NRTI/L3_CO')
+                     .filterBounds(lewisPlaceBoundary)
+                     .filterDate('2020-01-01', '2025-01-01');
+
+// 2. Reduce each collection to the mean over time
+var pm25_mean = pm25_monthly.mean().rename('PM25');
+var aai_mean = aai_monthly.mean().rename('AAI');
+var co_mean = co_monthly.mean().rename('CO');
+
+// 3. Normalize each band (optional, to 0-1)
+function normalize(image, minVal, maxVal){
+  minVal = ee.Number(minVal);
+  maxVal = ee.Number(maxVal);
+  return image.subtract(minVal).divide(maxVal.subtract(minVal));
+}
+
+var pm25_mean = pm25_monthly.select('b1').mean().rename('PM25');
+var aai_mean = aai_monthly.select('absorbing_aerosol_index').mean().rename('AAI');
+var co_mean = co_monthly.select('CO_column_number_density').mean().rename('CO');
+
+
+// 2. Normalize each for visualization (optional)
+function normalize(image, minVal, maxVal){
+  return image.subtract(ee.Number(minVal))
+              .divide(ee.Number(maxVal).subtract(ee.Number(minVal)));
+}
+
+var pm25_norm = normalize(pm25_mean, 0, 50);
+var aai_norm  = normalize(aai_mean, 0, 2);
+var co_norm   = normalize(co_mean, 0, 0.0005);
+
+// 3. Define color palettes
+var vis_pm25 = {min:0, max:1, palette: ['green','yellow','orange','red','darkred']};
+var vis_aai  = {min:0, max:1, palette: ['white','blue','purple','black']};
+var vis_co   = {min:0, max:1, palette: ['lightyellow','orange','red','darkred']};
+
+// 4. Add to map as separate layers
+Map.centerObject(lewisPlaceBoundary, 12);
+Map.addLayer(pm25_norm.clip(lewisPlaceBoundary), vis_pm25, 'PM2.5 Heat Map');
+Map.addLayer(aai_norm.clip(lewisPlaceBoundary), vis_aai, 'AAI Heat Map');
+Map.addLayer(co_norm.clip(lewisPlaceBoundary), vis_co, 'CO Heat Map');
+
+
+
+// =========================
+// 1. HEAT DATA (e.g., MODIS LST)
+// =========================
+
+// Load MODIS LST Daytime Collection (MOD11A2: 8-day LST 1 km)
+var lst = ee.ImageCollection('MODIS/061/MOD11A2')
+            .select('LST_Day_1km')  // Daytime LST
+            .filterBounds(lewisPlaceBoundary)
+            .filterDate('2017-01-01', '2025-01-01');
+
+// Function to compute monthly mean LST (convert to °C) for a region
+function monthlyLST(region, name){
+  var years = ee.List.sequence(2020, 2024);
+  var months = ee.List.sequence(1, 12);
+  
+  var monthly_mean = years.map(function(y){
+    y = ee.Number(y);
+    return months.map(function(m){
+      m = ee.Number(m);
+      var filtered = lst
+        .filter(ee.Filter.calendarRange(y, y, 'year'))
+        .filter(ee.Filter.calendarRange(m, m, 'month'));
+      
+      var mean = filtered.mean().reduceRegion({
+        reducer: ee.Reducer.mean(),
+        geometry: region,
+        scale: 1000,
+        maxPixels: 1e13
+      });
+      
+      var date = ee.Date.fromYMD(y, m, 1);
+      return ee.Feature(null, {
+        'date': date.format('YYYY-MM-dd'),
+        'HI': ee.Number(mean.get('LST_Day_1km')).multiply(0.02).subtract(273.15), // scale factor + K->C
+        'Region': name
+      });
+    });
+  }).flatten();
+  
+  return ee.FeatureCollection(monthly_mean);
+}
+
+// Compute for each region
+var residential_fc = monthlyLST(residentialParcels, 'Residential');
+var industrial_fc  = monthlyLST(industrialParcels, 'Industrial');
+var park_fc        = monthlyLST(parkParcels, 'Park');
+
+// Merge all regions
+var allRegions = residential_fc.merge(industrial_fc).merge(park_fc);
+
+// 3. Plot chart
+var chart = ui.Chart.feature.groups({
+  features: allRegions,
+  xProperty: 'date',
+  yProperty: 'HI',
+  seriesProperty: 'Region'
+})
+.setOptions({
+  title: 'Monthly Heat Index (LST °C) by Region',
+  hAxis: {title: 'Date'},
+  vAxis: {title: 'Heat Index (°C)'},
+  lineWidth: 2,
+  pointSize: 3
+});
+
+print(chart);
+
+// 4. Export table to Drive
+Export.table.toDrive({
+  collection: allRegions,
+  description: 'LewisPlace_HI_byRegion',
+  fileFormat: 'CSV'
+});
+
+
+
+
+
+
+
+
+// ================================================================
+//  LEWIS PLACE LAND USE CHANGE ANALYSIS (SENTINEL-2 NDVI & NDBI)
+//  Author: Ogonna
+//  Purpose: Detect tornado-related damage (vegetation & built-up change)
+// ================================================================
+
+// 1️⃣ Load AOI (Lewis Place boundary)
+var lewisPlaceBoundary = lewisPlace_ALL.filter(ee.Filter.eq('NHD_NAME', 'Lewis Place'));
+Map.centerObject(lewisPlaceBoundary, 14);
+Map.addLayer(lewisPlaceBoundary, {color: 'red'}, 'Lewis Place Boundary');
+
+// 2️⃣ Load Sentinel-2 Surface Reflectance data
+var s2 = ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
+  .filterBounds(lewisPlaceBoundary)
+  .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 10));
+
+// 3️⃣ Define before and after tornado periods
+// ⚠️ Change dates as needed for your event
+var before = s2.filterDate('2025-04-01', '2025-04-30').median();
+var after  = s2.filterDate('2025-05-01', '2025-05-31').median();
+
+// Clip to AOI
+before = before.clip(lewisPlaceBoundary);
+after  = after.clip(lewisPlaceBoundary);
+
+// 4️⃣ Compute NDVI and NDBI for both periods
+function addIndices(image) {
+  var ndvi = image.normalizedDifference(['B8', 'B4']).rename('NDVI');    // Vegetation
+  var ndbi = image.normalizedDifference(['B11', 'B8']).rename('NDBI');   // Built-up
+  return image.addBands(ndvi).addBands(ndbi);
+}
+
+before = addIndices(before);
+after  = addIndices(after);
+
+// 5️⃣ Compute change images (After - Before)
+var ndviChange = after.select('NDVI').subtract(before.select('NDVI')).rename('NDVI_Change');
+var ndbiChange = after.select('NDBI').subtract(before.select('NDBI')).rename('NDBI_Change');
+
+// Stack both changes together
+var changeStack = ndviChange.addBands(ndbiChange);
+
+// 6️⃣ Visualize the changes
+var visNDVI = {min: -0.5, max: 0.5, palette: ['red', 'white', 'green']}; // Red = loss, Green = gain
+var visNDBI = {min: -0.5, max: 0.5, palette: ['blue', 'white', 'orange']}; // Blue = decrease, Orange = increase
+
+Map.addLayer(ndviChange, visNDVI, 'NDVI Change (Vegetation)');
+Map.addLayer(ndbiChange, visNDBI, 'NDBI Change (Built-up)');
+
+// 7️⃣ Compute summary statistics for the region
+var stats = changeStack.reduceRegion({
+  reducer: ee.Reducer.mean().combine({
+    reducer2: ee.Reducer.stdDev(),
+    sharedInputs: true
+  }),
+  geometry: lewisPlaceBoundary,
+  scale: 10,
+  maxPixels: 1e13
+});
+print('Mean & StdDev of NDVI and NDBI change:', stats);
+
+// 8️⃣ Export change maps to Google Drive (for R analysis)
+Export.image.toDrive({
+  image: changeStack,
+  description: 'LewisPlace_LandUseChange_APRIL_MAY_2025',
+  region: lewisPlaceBoundary.geometry(),
+  scale: 10,
+  maxPixels: 1e13,
+  fileFormat: 'GeoTIFF'
+});
+
+// 9️⃣ Optional — Create thresholded change masks
+// Areas with large vegetation loss (NDVI < -0.1)
+var vegetationLoss = ndviChange.lt(-0.1);
+Map.addLayer(vegetationLoss.updateMask(vegetationLoss), {palette: ['red']}, 'Vegetation Loss');
+
+// Areas with new built-up (NDBI > 0.1)
+var builtupGain = ndbiChange.gt(0.1);
+Map.addLayer(builtupGain.updateMask(builtupGain), {palette: ['orange']}, 'Built-up Gain');
+
+//  🔟 Export masks too (optional)
+Export.image.toDrive({
+  image: vegetationLoss,
+  description: 'LewisPlace_VegetationLoss_Mask',
+  region: lewisPlaceBoundary.geometry(),
+  scale: 10,
+  maxPixels: 1e13,
+  fileFormat: 'GeoTIFF'
+});
+
+Export.image.toDrive({
+  image: builtupGain,
+  description: 'LewisPlace_BuiltUpGain_Mask',
+  region: lewisPlaceBoundary.geometry(),
+  scale: 10,
+  maxPixels: 1e13,
+  fileFormat: 'GeoTIFF'
+});
+
+print("✅ Change detection ready. View layers and export results in Drive.");

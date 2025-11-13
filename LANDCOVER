@@ -1,0 +1,135 @@
+/**** Start of imports. If edited, may not auto-convert in the playground. ****/
+var geometry = 
+    /* color: #0b4a8b */
+    /* locked: true */
+    ee.Geometry.Polygon(
+        [[[-90.25164384036904, 38.65453269429002],
+          [-90.25229293495065, 38.65472749253475],
+          [-90.25256383806115, 38.654689789690025],
+          [-90.25232512145882, 38.65446357220487],
+          [-90.25151509433633, 38.654082352233935],
+          [-90.2508794107998, 38.65399018885952],
+          [-90.25053340583688, 38.654478234470936],
+          [-90.25041538864022, 38.65474006014526],
+          [-90.25195229440575, 38.65482174955976]]]);
+/***** End of imports. If edited, may not auto-convert in the playground. *****/
+
+// Define the two points
+var factory = ee.Geometry.Point([-90.24852232651443, 38.65336055390887]);
+var sensor = ee.Geometry.Point([-90.2463488, 38.6433024]);
+
+// Compute the distance in meters
+var distance = factory.distance(sensor);
+
+// Print the distance
+print('Distance between factory and sensor (m):', distance);
+
+//Map.setCenter(-90.24852232651443, 38.65336055390887, 20); //the factory location
+Map.setCenter(-90.2463488, 38.6433024, 20); //the sensor location
+
+throw('stop')
+// Construct a collection of corresponding Dynamic World and Sentinel-2 for
+// inspection. Filter by region and date.
+var START = ee.Date('2025-07-01');
+var END = START.advance(1, 'month');
+
+var colFilter = ee.Filter.and(
+    ee.Filter.bounds(geometry),
+    ee.Filter.date(START, END));
+
+var dwCol = ee.ImageCollection('GOOGLE/DYNAMICWORLD/V1').filter(colFilter);
+var s2Col = ee.ImageCollection('COPERNICUS/S2_HARMONIZED').filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 10));
+
+// Link DW and S2 source images.
+var linkedCol = dwCol.linkCollection(s2Col, s2Col.first().bandNames());
+
+// Get example DW image with linked S2 image.
+var linkedImg = ee.Image(linkedCol.first());
+
+// Create a visualization that blends DW class label with probability.
+// Define list pairs of DW LULC label and color.
+var CLASS_NAMES = [
+    'water', 'trees', 'grass', 'flooded_vegetation', 'crops',
+    'shrub_and_scrub', 'built', 'bare', 'snow_and_ice'];
+
+var VIS_PALETTE = [
+    '419bdf', '397d49', '88b053', '7a87c6', 'e49635', 'dfc35a', 'c4281b',
+    'a59b8f', 'b39fe1'];
+
+// Create an RGB image of the label (most likely class) on [0, 1].
+var dwRgb = linkedImg
+    .select('label')
+    .visualize({min: 0, max: 8, palette: VIS_PALETTE})
+    .divide(255);
+
+// Get the most likely class probability.
+var top1Prob = linkedImg.select(CLASS_NAMES).reduce(ee.Reducer.max());
+
+// Create a hillshade of the most likely class probability on [0, 1];
+var top1ProbHillshade =
+    ee.Terrain.hillshade(top1Prob.multiply(100))
+    .divide(255);
+
+// Combine the RGB image with the hillshade.
+var dwRgbHillshade = dwRgb.multiply(top1ProbHillshade);
+
+// Display the Dynamic World visualization with the source Sentinel-2 image.
+Map.setCenter(-90.25128442436105, 38.65413471773475, 12);
+Map.addLayer(
+    linkedImg, {min: 0, max: 3000, bands: ['B4', 'B3', 'B2']}, 'Sentinel-2 L1C');
+Map.addLayer(
+    dwRgbHillshade, {min: 0, max: 0.65}, 'Dynamic World V1 - label hillshade');
+
+
+
+throw('stop')
+
+// Define your point
+var point = ee.Geometry.Point([-90.25128442436105, 38.65413471773475]);
+
+var collection = ee.ImageCollection('COPERNICUS/S5P/NRTI/L3_HCHO')
+  .select('tropospheric_HCHO_column_number_density')
+  .filterDate('2025-04-01', '2025-04-14')
+  .map(function(image){return image.clip(geometry)});
+
+
+// Display the sample region.
+Map.addLayer(ee.Image().paint(point, 0, 2), {}, 'region');
+// Display the sample region.
+//SMap.addLayer(ee.Image().paint(coverShapefile, 0, 2), {}, 'coverShapefile');
+
+// // Apply the coordinates method to the Point object.
+var pointCoordinates = point.coordinates();
+
+// // Print the result to the console.
+ print('point.coordinates(...) =', pointCoordinates);
+
+// Display relevant geometries on the map.
+Map.setCenter(-90.25128442436105, 38.65413471773475, 15);
+Map.addLayer(point,
+            {'color': 'black'},
+            'Geometry [black]: point');
+
+
+// Display the sample region.
+Map.addLayer(ee.Image().paint(point, 0, 2), {}, 'region');
+
+
+
+
+
+// collection = collection.clip();
+
+var band_viz = {
+  min: 0.0,
+  max: 0.000004,
+  palette: ['black', 'blue', 'purple', 'cyan', 'green', 'yellow', 'red']
+};
+
+Map.addLayer(collection.mean(), band_viz, 'S5P HCHO');
+Map.setCenter(-90.25128442436105, 38.65413471773475, 20);
+
+
+
+Map.setCenter(-90.24852232651443, 38.65336055390887, 20); //the factory location
+Map.setCenter(-90.2463488, 38.6433024, 20); //the sensor location
