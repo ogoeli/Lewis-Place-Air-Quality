@@ -83,11 +83,6 @@ This Google Earth Engine (GEE) script performs a comprehensive environmental and
 
 ---
 
-## **Author**
-
-Ogonna P. Eli, Ph.D. Student  
-ECOSAIL Lab, Department of Informatics and Computing,  
-Northern Arizona University
 
 ---
 
